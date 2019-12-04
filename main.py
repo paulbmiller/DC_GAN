@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.optim as opt
 import torch.nn as nn
@@ -9,29 +10,62 @@ from torch.utils.data import DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
 
-mb_size = 64
-g_lr = 2e-4
-d_lr = 2e-4
-epochs = 250
-CUDA = True
-device = torch.device("cuda" if torch.cuda.is_available() and CUDA else "cpu")
-transform = transforms.ToTensor()
-train_data = torchvision.datasets.MNIST('./data/', download=True,
-                                        transform=transform, train=True)
-train_loader = DataLoader(train_data, shuffle=True, batch_size=mb_size)
-data_iter = iter(train_loader)
 
-test_data = torchvision.datasets.MNIST('./data/', download=True,
-                                       transform=transform, train=False)
-test_loader = DataLoader(test_data, shuffle=False, batch_size=mb_size)
+def preprocess(database, mb_size):
+    """
+    Preprocessing phase which will return the training and testing dataloaders
+    and the number of channels of the images of the chosen dataset.
 
-imgs, labels = data_iter.next()
+    Arguments:
+        `database`: database ('MNIST', 'CIFAR10', 'CIFAR100')
+        `mb_size`: minibatch size
+    """
+    transform = transforms.ToTensor()
 
-txt_file = 'results/' + str(epochs) + '_epochs/' + 'output.txt'
+    if database == 'MNIST':
+        train_data = torchvision.datasets.MNIST('./data/', download=True,
+                                                transform=transform,
+                                                train=True)
+        train_loader = DataLoader(train_data, shuffle=True, batch_size=mb_size)
+        test_data = torchvision.datasets.MNIST('./data/', download=True,
+                                               transform=transform,
+                                               train=False)
+        test_loader = DataLoader(test_data, shuffle=False, batch_size=mb_size)
+        nc = 1
+
+    elif database == 'CIFAR10':
+        train_data = torchvision.datasets.CIFAR10('./data/', download=True,
+                                                  transform=transform,
+                                                  train=True)
+        train_loader = DataLoader(train_data, shuffle=True, batch_size=mb_size)
+        test_data = torchvision.datasets.CIFAR10('./data/', download=True,
+                                                 transform=transform,
+                                                 train=False)
+        test_loader = DataLoader(test_data, shuffle=False, batch_size=mb_size)
+        nc = 3
+
+    elif database == 'CIFAR100':
+        train_data = torchvision.datasets.CIFAR100('./data/',
+                                                   download=True,
+                                                   transform=transform,
+                                                   train=True)
+        train_loader = DataLoader(train_data, shuffle=True, batch_size=mb_size)
+        test_data = torchvision.datasets.CIFAR100('./data/',
+                                                  download=True,
+                                                  transform=transform,
+                                                  train=False)
+        test_loader = DataLoader(test_data, shuffle=False, batch_size=mb_size)
+        nc = 3
+
+    return train_data, train_loader, test_data, test_loader, nc
 
 
-def imshow(imgs, epoch, filename='', save=False,
-           save_dir='results/' + str(epochs) + '_epochs/'):
+def imshow(imgs, epoch, epochs, filename='', save=False):
+    """
+    Makes a PNG image of the given tensor of MNIST generated images given as
+    input and saves it in the results/nb_epochs/ directory.
+    """
+    save_dir = 'results/' + str(epochs) + '_epochs/'
     imgs = torchvision.utils.make_grid(imgs)
     npimgs = imgs.numpy()
     plt.figure(figsize=(8, 8))
@@ -43,33 +77,68 @@ def imshow(imgs, epoch, filename='', save=False,
     plt.show()
 
 
-Z_dim = 100
-X_dim = imgs.view(imgs.size(0), -1).size(1)
-X = int(np.sqrt(X_dim))
+def output_graph(path, filename, save=False):
+    """
+    This function will get the output text file of a run and in order to
+    visualize training data with matplotlib and print the testing results.
+    """
+
+    epochs = []
+    g_loss = []
+    d_loss = []
+    d_fake_mean = []
+    d_real_acc = []
+    d_fake_acc = []
+
+    with open(path + filename, 'r') as f:
+        line = f.readline()
+        cnt = 1
+        while line:
+            str_vars = line.split(',')[1:]
+            for i in range(len(str_vars)):
+                str_vars[i] = str_vars[i].split(' ')[2]
+            epochs.append(cnt)
+            g_loss.append(float(str_vars[0]))
+            d_loss.append(float(str_vars[1]))
+            d_fake_mean.append(float(str_vars[2]))
+            d_real_acc.append(float(str_vars[3][:-1])/100)
+            d_fake_acc.append(float(str_vars[4][:-2])/100)
+            cnt += 1
+            line = f.readline()
+
+    plt.plot(epochs, g_loss, label='Generator')
+    plt.plot(epochs, d_loss, label='Discriminator')
+    plt.title('Generator and discriminator losses')
+    plt.legend()
+    plt.xlabel('Epoch (last epoch is testing)')
+    plt.ylabel('Loss')
+    if save:
+        plt.savefig(path+'losses.png', dpi=200)
+    plt.show()
+
+    plt.plot(epochs, d_fake_mean,
+             label='Mean output on fake images')
+    plt.plot(epochs, d_real_acc,
+             label='Accuracy spotting real images')
+    plt.plot(epochs, d_fake_acc,
+             label='Accuracy spotting fake images')
+    plt.plot([0, epochs[-1]], [0.5, 0.5])
+    plt.title('Discriminator values')
+    plt.legend()
+    plt.xlabel('Epoch (last epoch is testing)')
+    if save:
+        plt.savefig(path+'discriminator_info.png', dpi=200)
+    plt.show()
 
 
-class Flatten(torch.nn.Module):
-    """
-    Flatten a convolution block into a simple vector.
-    Replaces the flattening line (view) often found into forward() methods of
-    networks. This makes it easier to navigate the network with introspection.
-    """
-    def forward(self, x):
-        x = x.view(x.size(0), -1)
-        return x
-
-
-class Unflatten(torch.nn.Module):
-    """
-    Unflatten a vector during the forward pass in order to run convolutions.
-    """
-    def forward(self, x):
-        x = x.view(x.size(0), 1, 10, 10)
-        return x
+def write_to_file(filepath, str_out):
+    mode = 'a' if os.path.exists(filepath) else 'w'
+    with open(filepath, mode) as f:
+        f.write(str_out+'\n')
 
 
 class Gen(nn.Module):
-    def __init__(self):
+    def __init__(self, Z_dim, out_channels):
         super(Gen, self).__init__()
         self.model = nn.Sequential(
                 # Input shape: batch_size, Z_dim, 1, 1
@@ -90,7 +159,7 @@ class Gen(nn.Module):
                 nn.BatchNorm2d(2),
                 nn.ReLU(True),
                 # Shape: batch_size, 8, 24, 24
-                nn.ConvTranspose2d(2, 1, kernel_size=5, bias=False),
+                nn.ConvTranspose2d(2, out_channels, kernel_size=5, bias=False),
                 nn.Sigmoid()
                 # Shape: batch_size, 1, 28, 28
         )
@@ -99,15 +168,12 @@ class Gen(nn.Module):
         return self.model(x)
 
 
-G = Gen().to(device)
-
-
 class Dis(nn.Module):
-    def __init__(self):
+    def __init__(self, in_channels):
         super(Dis, self).__init__()
         self.model = nn.Sequential(
             # Input shape: batch_size, 1, 28, 28
-            nn.Conv2d(1, 2, kernel_size=5, bias=False),
+            nn.Conv2d(in_channels, 2, kernel_size=5, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
             # Shape: batch_size, 8, 24, 24
             nn.Conv2d(2, 4, kernel_size=4, stride=2, bias=False),
@@ -123,6 +189,7 @@ class Dis(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             # Shape: batch_size, 1, 5, 5
             nn.Conv2d(16, 1, kernel_size=5, bias=False),
+            # Shape: batch_size, 1, 1, 1
             nn.Sigmoid()
         )
 
@@ -130,127 +197,182 @@ class Dis(nn.Module):
         return self.model(x)
 
 
-D = Dis().to(device)
+def train(D, G, epochs, device, g_opt, d_opt, Z_dim, txt_file, train_data,
+          train_loader, ep_out):
+    """
+    Training routine which trains the discriminator on every batch and then the
+    generator.
+    """
+    for epoch in range(1, epochs+1):
+        G_loss_run = 0.0
+        D_loss_run = 0.0
+        D_fake_sum = 0.0
+        D_right_pred = 0
+        D_fake_right_pred = 0
+        for i, (data, _) in enumerate(train_loader):
+            data = data.to(device)
+            b_size = data.size(0)
 
-g_opt = opt.Adam(G.parameters(), lr=g_lr)
-d_opt = opt.Adam(D.parameters(), lr=d_lr)
+            one_labels = torch.ones(b_size, 1, 1, 1).to(device)
+            zero_labels = torch.zeros(b_size, 1, 1, 1).to(device)
 
-for epoch in range(1, epochs+1):
-    G_loss_run = 0.0
-    D_loss_run = 0.0
-    D_fake_sum = 0.0
-    D_right_pred = 0
-    D_fake_right_pred = 0
-    for i, (data, _) in enumerate(train_loader):
-        data = data.to(device)
-        b_size = data.size(0)
+            z = torch.randn(b_size, Z_dim, 1, 1).to(device)
 
-        one_labels = torch.ones(b_size, 1, 1, 1).to(device)
-        zero_labels = torch.zeros(b_size, 1, 1, 1).to(device)
+            D_real = D(data)
+            D_fake = D(G(z))
 
-        z = torch.randn(b_size, Z_dim, 1, 1).to(device)
+            D_real_loss = F.binary_cross_entropy(D_real, one_labels)
+            D_fake_loss = F.binary_cross_entropy(D_fake, zero_labels)
 
-        D_real = D(data)
-        D_fake = D(G(z))
+            D_loss = D_real_loss + D_fake_loss
 
-        D_real_loss = F.binary_cross_entropy(D_real, one_labels)
-        D_fake_loss = F.binary_cross_entropy(D_fake, zero_labels)
+            d_opt.zero_grad()
+            D_loss.backward()
+            d_opt.step()
 
-        D_loss = D_real_loss + D_fake_loss
+            z = torch.randn(b_size, Z_dim, 1, 1).to(device)
+            D_fake = D(G(z))
+            G_loss = F.binary_cross_entropy(D_fake, one_labels)
 
-        d_opt.zero_grad()
-        D_loss.backward()
-        d_opt.step()
+            g_opt.zero_grad()
+            G_loss.backward()
+            g_opt.step()
 
-        z = torch.randn(b_size, Z_dim, 1, 1).to(device)
-        D_fake = D(G(z))
-        G_loss = F.binary_cross_entropy(D_fake, one_labels)
+            G_loss_run += G_loss.item()
+            D_loss_run += D_loss.item()
+            D_fake_sum += torch.sum(D_fake).item()
 
-        g_opt.zero_grad()
-        G_loss.backward()
-        g_opt.step()
+            with torch.no_grad():
+                D_right_pred += torch.sum(D_real > 0.5)
+                D_fake_right_pred += torch.sum(D_fake < 0.5)
 
-        G_loss_run += G_loss.item()
-        D_loss_run += D_loss.item()
-        D_fake_sum += torch.sum(D_fake).item()
+        D_right_pred = 100*D_right_pred/float(len(train_data))
+        D_fake_right_pred = 100*D_fake_right_pred/float(len(train_data))
 
-        with torch.no_grad():
+        str_list = ['Epoch: {}', 'G_loss: {:0.5f}', 'D_loss: {:0.5f}',
+                    'D_fake_mean: {:0.5f}', 'D_real_acc: {:0.3f}%',
+                    'D_fake_acc: {:0.3f}%']
+        str_out = ', '.join(str_list)
+        D_fake_mean = D_fake_sum/len(train_data)
+        final_out = str_out.format(epoch, G_loss_run/(i+1), D_loss_run/(i+1),
+                                   D_fake_mean, D_right_pred,
+                                   D_fake_right_pred)
+        print(final_out)
+        mode = 'a' if os.path.exists(txt_file) else 'w'
+        with open(txt_file, mode) as f:
+            f.write(final_out+'\n')
+
+        samples = G(z).detach()
+        samples = samples.view(samples.size(0), 1, 28, 28).cpu()
+        if epoch % ep_out == 0:
+            imshow(samples, epoch, epochs, filename=str(D_fake_mean)[2:11],
+                   save=True)
+        else:
+            imshow(samples, epoch, epochs, filename=str(D_fake_mean)[2:11])
+
+
+def evaluate(D, G, device, Z_dim, txt_file, test_data, test_loader):
+    """
+    Testing routine which goes through the testing set and the same number
+    of generated images. It will save the last batch as samples in results and
+    create a string output of the evaluation routine in the results/output.txt
+    file.
+    """
+    with torch.no_grad():
+        G_loss_run = 0.0
+        D_loss_run = 0.0
+        D_fake_sum = 0.0
+        D_right_pred = 0
+        D_fake_right_pred = 0
+        G.eval()
+        D.eval()
+        for i, (data, _) in enumerate(test_loader):
+            data = data.to(device)
+            b_size = data.size(0)
+
+            one_labels = torch.ones(b_size, 1, 1, 1).to(device)
+            zero_labels = torch.zeros(b_size, 1, 1, 1).to(device)
+
+            z = torch.randn(b_size, Z_dim, 1, 1).to(device)
+
+            D_real = D(data)
+            D_fake = D(G(z))
+
+            D_real_loss = F.binary_cross_entropy(D_real, one_labels)
+            D_fake_loss = F.binary_cross_entropy(D_fake, zero_labels)
+
+            D_loss = D_real_loss + D_fake_loss
+            G_loss = F.binary_cross_entropy(D_fake, one_labels)
+
+            G_loss_run += G_loss.item()
+            D_loss_run += D_loss.item()
+            D_fake_sum += torch.sum(D_fake).item()
+
             D_right_pred += torch.sum(D_real > 0.5)
             D_fake_right_pred += torch.sum(D_fake < 0.5)
 
-    D_right_pred = 100*D_right_pred/float(len(train_data))
-    D_fake_right_pred = 100*D_fake_right_pred/float(len(train_data))
+        D_right_pred = 100*D_right_pred/float(len(test_data))
+        D_fake_right_pred = 100*D_fake_right_pred/float(len(test_data))
 
-    str_list = ['Epoch: {}', 'G_loss: {:0.5f}', 'D_loss: {:0.5f}',
-                'D_fake_mean: {:0.5f}', 'D_real_acc: {:0.3f}%',
-                'D_fake_acc: {:0.3f}%']
-    str_out = ', '.join(str_list)
-    D_fake_mean = D_fake_sum/len(train_data)
-    final_out = str_out.format(epoch, G_loss_run/(i+1), D_loss_run/(i+1),
-                               D_fake_mean, D_right_pred, D_fake_right_pred)
-    print(final_out)
-    f = open(txt_file, 'a')
-    f.write(final_out+'\n')
-    f.close()
+        str_list = ['Test epoch', 'G_loss: {:0.5f}', 'D_loss: {:0.5f}',
+                    'D_fake_mean: {:0.5f}', 'D_real_acc: {:0.3f}%',
+                    'D_fake_acc: {:0.3f}%']
+        str_out = ', '.join(str_list)
+        D_fake_mean = D_fake_sum/len(test_data)
+        final_out = str_out.format(G_loss_run/(i+1), D_loss_run/(i+1),
+                                   D_fake_mean, D_right_pred,
+                                   D_fake_right_pred)
+        print(final_out)
+        write_to_file(txt_file, final_out)
 
-    samples = G(z).detach()
-    samples = samples.view(samples.size(0), 1, 28, 28).cpu()
-    if epoch % 10 == 0:
-        imshow(samples, epoch, filename=str(D_fake_mean)[2:11], save=True)
-    else:
-        imshow(samples, epoch, filename=str(D_fake_mean)[2:11])
+        samples = G(z).detach()
+        samples = samples.view(samples.size(0), 1, 28, 28).cpu()
 
 
-with torch.no_grad():
-    G_loss_run = 0.0
-    D_loss_run = 0.0
-    D_fake_sum = 0.0
-    D_right_pred = 0
-    D_fake_right_pred = 0
-    G.eval()
-    D.eval()
-    for i, (data, _) in enumerate(test_loader):
-        data = data.to(device)
-        b_size = data.size(0)
+def run(db='MNIST', mb_size=64, g_lr=2e-4, d_lr=2e-4, epochs=100, Z_dim=100,
+        ep_out=10, CUDA=True):
+    """Main function for a typical run of preprocessing/training/testing.
 
-        one_labels = torch.ones(b_size, 1, 1, 1).to(device)
-        zero_labels = torch.zeros(b_size, 1, 1, 1).to(device)
+    Arguments are:
+        `db`: database (default 'MNIST')
+        `mb_size`: minibatch size (default 64)
+        `g_lr`: learning rate of the generator (default 2e-4)
+        `d_lr`: learning rate of the discriminator (default 2e-4)
+        `epochs`: number of epochs of training (default 50)
+        `Z_dim`: size of the input noise vector for the generator (default 100)
+        `ep_out`: interval of training epochs to save a sample of the last
+        batch
+        `CUDA`: where we want to use CUDA or not if available (default True)
+    """
+    if db != 'MNIST':
+        print('Model not yet implemented for databases other than MNIST')
+        print('Now Exiting')
+        exit()
 
-        z = torch.randn(b_size, Z_dim, 1, 1).to(device)
+    train_data, train_loader, test_data, test_loader, nc = preprocess(db,
+                                                                      mb_size)
+    device = torch.device("cuda" if torch.cuda.is_available() and
+                          CUDA else "cpu")
+    G = Gen(Z_dim, nc).to(device)
+    D = Dis(nc).to(device)
+    g_opt = opt.Adam(G.parameters(), lr=g_lr)
+    d_opt = opt.Adam(D.parameters(), lr=d_lr)
+    path = 'results/' + str(epochs) + '_epochs/'
 
-        D_real = D(data)
-        D_fake = D(G(z))
+    try:
+        os.mkdir(path)
+    except OSError:
+        print('Output directory {} creation failed'.format(path))
+        print('Now Exiting.')
+        exit()
 
-        D_real_loss = F.binary_cross_entropy(D_real, one_labels)
-        D_fake_loss = F.binary_cross_entropy(D_fake, zero_labels)
+    txt_file = path + 'output.txt'
+    train(D, G, epochs, device, g_opt, d_opt, Z_dim, txt_file, train_data,
+          train_loader, ep_out)
+    evaluate(D, G, device, Z_dim, txt_file, test_data, test_loader)
 
-        D_loss = D_real_loss + D_fake_loss
+    output_graph(path, 'output.txt', True)
 
-        z = torch.randn(b_size, Z_dim, 1, 1).to(device)
-        D_fake = D(G(z))
-        G_loss = F.binary_cross_entropy(D_fake, one_labels)
 
-        G_loss_run += G_loss.item()
-        D_loss_run += D_loss.item()
-        D_fake_sum += torch.sum(D_fake).item()
-
-        D_right_pred += torch.sum(D_real > 0.5)
-        D_fake_right_pred += torch.sum(D_fake < 0.5)
-
-    D_right_pred = 100*D_right_pred/float(len(test_data))
-    D_fake_right_pred = 100*D_fake_right_pred/float(len(test_data))
-
-    str_list = ['Test epoch: {}', 'G_loss: {:0.5f}', 'D_loss: {:0.5f}',
-                'D_fake_mean: {:0.5f}', 'D_real_acc: {:0.3f}%',
-                'D_fake_acc: {:0.3f}%']
-    str_out = ', '.join(str_list)
-    D_fake_mean = D_fake_sum/len(test_data)
-    final_out = str_out.format(epoch, G_loss_run/(i+1), D_loss_run/(i+1),
-                               D_fake_mean, D_right_pred, D_fake_right_pred)
-    print(final_out)
-    f = open(txt_file, 'a')
-    f.write(final_out+'\n')
-    f.close()
-
-    samples = G(z).detach()
-    samples = samples.view(samples.size(0), 1, 28, 28).cpu()
+if __name__ == '__main__':
+    run()
