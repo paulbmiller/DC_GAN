@@ -60,20 +60,23 @@ def preprocess(database, mb_size):
     return train_data, train_loader, test_data, test_loader, nc
 
 
-def imshow(imgs, epoch, epochs, filename='', save=False):
+def imshow(imgs, epoch, epochs, db, filepath, filename='', save=False):
     """
     Makes a PNG image of the given tensor of MNIST generated images given as
     input and saves it in the results/nb_epochs/ directory.
     """
-    save_dir = 'results/' + str(epochs) + '_epochs/'
     imgs = torchvision.utils.make_grid(imgs)
     npimgs = imgs.numpy()
-    plt.figure(figsize=(8, 8))
-    plt.imshow(np.transpose(npimgs, (1, 2, 0)), cmap='Greys_r')
+    if db == 'MNIST':
+        plt.figure(figsize=(8, 8))
+        plt.imshow(np.transpose(npimgs, (1, 2, 0)), cmap='Greys_r')
+    elif db == 'CIFAR10' or db == 'CIFAR100':
+        plt.figure(figsize=(8, 8))
+        plt.imshow(np.transpose(npimgs, (1, 2, 0)))
     plt.xticks([])
     plt.yticks([])
     if save:
-        plt.savefig(save_dir + filename + '_' + str(epoch) + '.png')
+        plt.savefig(filepath + filename + '_' + str(epoch) + '.png')
     plt.show()
 
 
@@ -138,67 +141,92 @@ def write_to_file(filepath, str_out):
 
 
 class Gen(nn.Module):
-    def __init__(self, Z_dim, out_channels):
+    def __init__(self, Z_dim, out_channels, db):
         super(Gen, self).__init__()
+        self.db = db
         self.model = nn.Sequential(
                 # Input shape: batch_size, Z_dim, 1, 1
-                nn.ConvTranspose2d(Z_dim, 16, kernel_size=5, bias=False),
-                nn.BatchNorm2d(16),
+                nn.ConvTranspose2d(Z_dim, out_channels*64, kernel_size=5,
+                                   bias=False),
+                nn.BatchNorm2d(out_channels*64),
                 nn.ReLU(True),
                 # Shape: batch_size, 1, 5, 5
-                nn.ConvTranspose2d(16, 8, kernel_size=2, stride=2,
+                nn.ConvTranspose2d(out_channels*64, out_channels*16,
+                                   kernel_size=2, stride=2,
                                    bias=False),
-                nn.BatchNorm2d(8),
+                nn.BatchNorm2d(out_channels*16),
                 nn.ReLU(True),
                 # Shape: batch_size, 1, 10, 10
-                nn.ConvTranspose2d(8, 4, kernel_size=2, bias=False),
-                nn.BatchNorm2d(4),
+                nn.ConvTranspose2d(out_channels*16, out_channels*8,
+                                   kernel_size=2, bias=False),
+                nn.BatchNorm2d(out_channels*8),
                 nn.ReLU(True),
                 # Shape: batch_size, 16, 11, 11
-                nn.ConvTranspose2d(4, 2, kernel_size=4, stride=2, bias=False),
-                nn.BatchNorm2d(2),
+                nn.ConvTranspose2d(out_channels*8, out_channels*4,
+                                   kernel_size=4, stride=2, bias=False),
+                nn.BatchNorm2d(out_channels*4),
                 nn.ReLU(True),
                 # Shape: batch_size, 8, 24, 24
-                nn.ConvTranspose2d(2, out_channels, kernel_size=5, bias=False),
-                nn.Sigmoid()
+                nn.ConvTranspose2d(out_channels*4, out_channels, kernel_size=5,
+                                   bias=False)
                 # Shape: batch_size, 1, 28, 28
         )
+        if self.db == 'CIFAR10' or self.db == 'CIFAR100':
+            self.last_layer = nn.Sequential(
+                    nn.ConvTranspose2d(out_channels, out_channels,
+                                       kernel_size=5, bias=False),
+                    nn.Sigmoid())
+        elif self.db == 'MNIST':
+            self.last_layer = nn.Sigmoid()
 
     def forward(self, x):
-        return self.model(x)
+        return self.last_layer(self.model(x))
 
 
 class Dis(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, in_channels, db):
         super(Dis, self).__init__()
-        self.model = nn.Sequential(
-            # Input shape: batch_size, 1, 28, 28
-            nn.Conv2d(in_channels, 2, kernel_size=5, bias=False),
+        self.db = db
+        if self.db == 'CIFAR10' or self.db == 'CIFAR100':
+            # shape: batch_size, 3, 32, 32
+            self.conv1 = nn.Sequential(
+                nn.Conv2d(in_channels, in_channels, kernel_size=5,
+                          bias=False),
+                nn.LeakyReLU(0.2, inplace=True)
+                )
+        self.seq = nn.Sequential(
+            # shape: batch_size, in, 28, 28
+            nn.Conv2d(in_channels, in_channels*4, kernel_size=5, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
-            # Shape: batch_size, 8, 24, 24
-            nn.Conv2d(2, 4, kernel_size=4, stride=2, bias=False),
-            nn.BatchNorm2d(4),
+            # Shape: batch_size, in*2, 24, 24
+            nn.Conv2d(in_channels*4, in_channels*8, kernel_size=4, stride=2,
+                      bias=False),
+            nn.BatchNorm2d(in_channels*8),
             nn.LeakyReLU(0.2, inplace=True),
-            # Shape: batch_size, 16, 11, 11
-            nn.Conv2d(4, 8, kernel_size=2, bias=False),
-            nn.BatchNorm2d(8),
+            # Shape: batch_size, in*4, 11, 11
+            nn.Conv2d(in_channels*8, in_channels*16, kernel_size=2,
+                      bias=False),
+            nn.BatchNorm2d(in_channels*16),
             nn.LeakyReLU(0.2, inplace=True),
-            # Shape: batch_size, 1, 10, 10
-            nn.Conv2d(8, 16, kernel_size=2, stride=2, bias=False),
-            nn.BatchNorm2d(16),
+            # Shape: batch_size, in*8, 10, 10
+            nn.Conv2d(in_channels*16, in_channels*64, kernel_size=2, stride=2,
+                      bias=False),
+            nn.BatchNorm2d(in_channels*64),
             nn.LeakyReLU(0.2, inplace=True),
-            # Shape: batch_size, 1, 5, 5
-            nn.Conv2d(16, 1, kernel_size=5, bias=False),
+            # Shape: batch_size, in*16, 5, 5
+            nn.Conv2d(in_channels*64, 1, kernel_size=5, bias=False),
             # Shape: batch_size, 1, 1, 1
             nn.Sigmoid()
         )
 
     def forward(self, x):
-        return self.model(x)
+        if self.db == 'CIFAR10' or self.db == 'CIFAR100':
+            x = self.conv1(x)
+        return self.seq(x)
 
 
-def train(D, G, epochs, device, g_opt, d_opt, Z_dim, txt_file, train_data,
-          train_loader, ep_out):
+def train(D, G, epochs, device, g_opt, d_opt, Z_dim, filepath, txt_file,
+          train_data, train_loader, ep_out, db):
     """
     Training routine which trains the discriminator on every batch and then the
     generator.
@@ -263,15 +291,19 @@ def train(D, G, epochs, device, g_opt, d_opt, Z_dim, txt_file, train_data,
             f.write(final_out+'\n')
 
         samples = G(z).detach()
-        samples = samples.view(samples.size(0), 1, 28, 28).cpu()
+        if db == 'MNIST':
+            samples = samples.view(samples.size(0), 1, 28, 28).cpu()
+        elif db == 'CIFAR10' or db == 'CIFAR100':
+            samples = samples.view(samples.size(0), 3, 32, 32).cpu()
         if epoch % ep_out == 0:
-            imshow(samples, epoch, epochs, filename=str(D_fake_mean)[2:11],
-                   save=True)
+            imshow(samples, epoch, epochs, db, filepath,
+                   filename=str(D_fake_mean)[2:11], save=True)
         else:
-            imshow(samples, epoch, epochs, filename=str(D_fake_mean)[2:11])
+            imshow(samples, epoch, epochs, db, filepath,
+                   filename=str(D_fake_mean)[2:11])
 
 
-def evaluate(D, G, device, Z_dim, txt_file, test_data, test_loader):
+def evaluate(D, G, device, Z_dim, txt_file, test_data, test_loader, db):
     """
     Testing routine which goes through the testing set and the same number
     of generated images. It will save the last batch as samples in results and
@@ -326,10 +358,20 @@ def evaluate(D, G, device, Z_dim, txt_file, test_data, test_loader):
         write_to_file(txt_file, final_out)
 
         samples = G(z).detach()
-        samples = samples.view(samples.size(0), 1, 28, 28).cpu()
+        if db == 'MNIST':
+            samples = samples.view(samples.size(0), 1, 28, 28).cpu()
+        elif db == 'CIFAR10' or db == 'CIFAR100':
+            samples = samples.view(samples.size(0), 3, 32, 32).cpu()
 
 
-def run(db='MNIST', mb_size=64, g_lr=2e-4, d_lr=2e-4, epochs=100, Z_dim=100,
+def create_dir(path):
+    try:
+        os.mkdir(path)
+    except OSError:
+        return
+
+
+def run(db='MNIST', mb_size=64, g_lr=2e-4, d_lr=2e-4, epochs=200, Z_dim=300,
         ep_out=10, CUDA=True):
     """Main function for a typical run of preprocessing/training/testing.
 
@@ -344,35 +386,31 @@ def run(db='MNIST', mb_size=64, g_lr=2e-4, d_lr=2e-4, epochs=100, Z_dim=100,
         batch
         `CUDA`: where we want to use CUDA or not if available (default True)
     """
-    if db != 'MNIST':
-        print('Model not yet implemented for databases other than MNIST')
-        print('Now Exiting')
-        exit()
 
     train_data, train_loader, test_data, test_loader, nc = preprocess(db,
                                                                       mb_size)
     device = torch.device("cuda" if torch.cuda.is_available() and
                           CUDA else "cpu")
-    G = Gen(Z_dim, nc).to(device)
-    D = Dis(nc).to(device)
+    G = Gen(Z_dim, nc, db).to(device)
+    D = Dis(nc, db).to(device)
     g_opt = opt.Adam(G.parameters(), lr=g_lr)
     d_opt = opt.Adam(D.parameters(), lr=d_lr)
-    path = 'results/' + str(epochs) + '_epochs/'
 
-    try:
-        os.mkdir(path)
-    except OSError:
-        print('Output directory {} creation failed'.format(path))
-        print('Now Exiting.')
-        exit()
+    path = 'results/'
+    create_dir(path)
+    path += db
+    path += '/'
+    create_dir(path)
+    path += str(epochs) + '_epochs/'
+    create_dir(path)
 
     txt_file = path + 'output.txt'
-    train(D, G, epochs, device, g_opt, d_opt, Z_dim, txt_file, train_data,
-          train_loader, ep_out)
-    evaluate(D, G, device, Z_dim, txt_file, test_data, test_loader)
+    train(D, G, epochs, device, g_opt, d_opt, Z_dim, path, txt_file,
+          train_data, train_loader, ep_out, db)
+    evaluate(D, G, device, Z_dim, txt_file, test_data, test_loader, db)
 
     output_graph(path, 'output.txt', True)
 
 
 if __name__ == '__main__':
-    run()
+    run('CIFAR10')
