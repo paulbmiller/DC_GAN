@@ -404,6 +404,10 @@ def run(db='MNIST', mb_size=64, g_lr=2e-4, d_lr=2e-4, epochs=200, Z_dim=300,
     path += str(epochs) + '_epochs/'
     create_dir(path)
 
+    params_str = 'batch_size:{}, g_lr:{}, d_lr:{}, Z_dim:{}\n'.format(
+            mb_size, g_lr, d_lr, Z_dim)
+    write_to_file(path+'hyperparams.txt', params_str)
+
     txt_file = path + 'output.txt'
     train(D, G, epochs, device, g_opt, d_opt, Z_dim, path, txt_file,
           train_data, train_loader, ep_out, db)
