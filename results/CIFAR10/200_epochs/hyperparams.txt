@@ -1,0 +1,2 @@
+batch_size:64, g_lr:0.0002, d_lr:0.0002, Z_dim:300
+
